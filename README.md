@@ -1,2 +1,3 @@
 # CropCircuit
 A Soil Mapping System for Climate-Smart Farming
+Traditional soil testing methods are expensive, time-consuming, and usually provide only a single data point for an entire field, failing to capture variation within the land. Without data, farmers may overwater or underwater crops, or plant crops not suited to soil conditions. This leads to wasted water and lower yields. As climate variability increases, the cost of this guesswork becomes even higher. My project Crop Circuit aims to bring the right information at the right time to the farmer’s fingertips. It focuses on three closely linked challenges farmers face under climate uncertainty: water management, soil nutrition, and crop suitability.
