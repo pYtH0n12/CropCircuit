@@ -1,0 +1,198 @@
+#include <SoftwareSerial.h>
+#include <Wire.h>
+#include <U8g2lib.h>
+
+/* ================= OLED (SH1106, LOW RAM) ================= */
+U8G2_SH1106_128X64_NONAME_1_HW_I2C u8g2(
+  U8G2_R0,
+  U8X8_PIN_NONE
+);
+
+/* ================= RS485 SENSOR ================= */
+#define RE 8
+#define DE 7
+SoftwareSerial mod(2, 3);   // RX, TX
+
+/* ================= RACK MOTOR ================= */
+const int IN1 = 4;
+const int IN2 = 6;
+const int ENA = 5;
+
+/* ================= WHEEL MOTORS ================= */
+const int IN3 = 10;
+const int IN4 = 11;
+const int ENB = 9;
+
+/* ================= TIMING ================= */
+const int rackDownTime   = 1500;
+const int rackUpTime     = 2500;
+const int rackSpeedDown  = 100;
+const int rackSpeedUp    = 255;
+const int sensorWaitTime = 3000;
+const int wheelRunTime   = 5000;
+
+/* ================= MODBUS ================= */
+const byte soilRequest[] = {0x01,0x03,0x00,0x00,0x00,0x04,0x44,0x09};
+byte response[13];
+
+void setup() {
+  Serial.begin(9600);
+  mod.begin(4800);
+
+  pinMode(RE, OUTPUT); pinMode(DE, OUTPUT);
+  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT); pinMode(ENA, OUTPUT);
+  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT); pinMode(ENB, OUTPUT);
+
+  u8g2.begin();
+
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(20, 32, "SYSTEM READY");
+  } while (u8g2.nextPage());
+
+  delay(2000);
+}
+
+void loop() {
+  stopWheels();
+  stopRack();
+  showStatus("STOPPED / READY");
+  delay(1000);
+
+  showStatus("LOWERING RACK");
+  moveRackDown();
+
+  showStatus("WAITING IN SOIL");
+  delay(sensorWaitTime);
+
+  readSoilSensor();
+
+  showStatus("RETRACTING RACK");
+  moveRackUp();
+
+  showStatus("RACK CLEAR");
+  delay(1500);
+
+  showStatus("DRIVING...");
+  runWheels(255);
+  delay(wheelRunTime);
+  stopWheels();
+}
+
+/* ================= DISPLAY ================= */
+void showStatus(const char* msg) {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 10, "ROBOT STATUS");
+    u8g2.drawHLine(0, 12, 128);
+    u8g2.drawStr(0, 35, msg);
+  } while (u8g2.nextPage());
+}
+
+void showSoil(float m, float t, int e, float p) {
+  char line[20];
+  char num[10];
+
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 10, "SOIL DATA");
+    u8g2.drawHLine(0, 12, 128);
+
+    dtostrf(m, 4, 1, num);
+    strcpy(line, "Moist: ");
+    strcat(line, num);
+    strcat(line, "%");
+    u8g2.drawStr(0, 25, line);
+
+    dtostrf(t, 4, 1, num);
+    strcpy(line, "Temp : ");
+    strcat(line, num);
+    strcat(line, "C");
+    u8g2.drawStr(0, 35, line);
+
+    itoa(e, num, 10);
+    strcpy(line, "EC   : ");
+    strcat(line, num);
+    u8g2.drawStr(0, 45, line);
+
+    dtostrf(p, 3, 1, num);
+    strcpy(line, "pH   : ");
+    strcat(line, num);
+    u8g2.drawStr(0, 55, line);
+
+  } while (u8g2.nextPage());
+}
+
+/* ================= MOTORS ================= */
+void moveRackDown() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  analogWrite(ENA, rackSpeedDown);
+  delay(rackDownTime);
+  stopRack();
+}
+
+void moveRackUp() {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, rackSpeedUp);
+  delay(rackUpTime);
+  stopRack();
+}
+
+void stopRack() {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, 200);
+  delay(150);
+  analogWrite(ENA, 0);
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+}
+
+void runWheels(int speed) {
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+  analogWrite(ENB, speed);
+}
+
+void stopWheels() {
+  analogWrite(ENB, 0);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+}
+
+/* ================= SENSOR ================= */
+bool readSoilSensor() {
+  digitalWrite(DE, HIGH);
+  digitalWrite(RE, HIGH);
+  delay(10);
+
+  mod.write(soilRequest, sizeof(soilRequest));
+  mod.flush();
+
+  digitalWrite(DE, LOW);
+  digitalWrite(RE, LOW);
+  delay(10);
+
+  unsigned long t0 = millis();
+  while (mod.available() < 13 && millis() - t0 < 1000);
+
+  if (mod.available() >= 13) {
+    for (byte i = 0; i < 13; i++) response[i] = mod.read();
+
+    float moisture = (response[3] << 8 | response[4]) / 10.0;
+    int tr = (response[5] << 8 | response[6]);
+    float temp = (tr > 0x7FFF) ? (0x10000 - tr) / -10.0 : tr / 10.0;
+    int ec = (response[7] << 8 | response[8]);
+    float ph = (response[9] << 8 | response[10]) / 10.0;
+
+    showSoil(moisture, temp, ec, ph);
+    delay(3000);
+    return true;
+  }
+  return false;
+}
